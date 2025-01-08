@@ -147,7 +147,7 @@ const ObjectDetection = () => {
 
   return (
     <div className="flex flex-col justify-center items-center">
-      <h1 className="text-2xl font-bold">Object Detection</h1>
+      <h1 className="text-5xl font-mono">Object Detection</h1>
       {loading ? (
         <div>Loading devices...</div>
       ) : (
