@@ -1,56 +1,72 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import Webcam from "react-webcam";
 import { load as cocossdload } from "@tensorflow-models/coco-ssd";
 import * as tf from "@tensorflow/tfjs";
-
-let detectInterval;
 
 const ObjectDetection = () => {
   const [devices, setDevices] = useState([]);
   const [currentDeviceId, setCurrentDeviceId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [cameraPermissionGranted, setCameraPermissionGranted] = useState(false);
   const [personDetected, setPersonDetected] = useState(false);
   const [isAnnouncementActive, setIsAnnouncementActive] = useState(false);
 
   const canvasRef = useRef(null);
   const webcamRef = useRef(null);
+  const cocoModelRef = useRef(null);
 
-  const runCoco = async () => {
-    setLoading(true);
-    const net = await cocossdload(); // Load coco-ssd model
-    setLoading(false);
+  const videoConstraints = useRef({}).current;
 
-    // Start detection at intervals
-    detectInterval = setInterval(() => {
-      detectObjects(net);
-    }, 100);
-  };
+  const checkCameraPermission = useCallback(async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ video: true });
+      setCameraPermissionGranted(true);
+      fetchDevices();
+    } catch (error) {
+      alert("Camera permission is required to proceed.");
+      setLoading(false);
+    }
+  }, []);
 
-  const detectObjects = async (net) => {
+  const fetchDevices = useCallback(async () => {
+    try {
+      const mediaDevices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = mediaDevices.filter(
+        (device) => device.kind === "videoinput"
+      );
+      setDevices(videoDevices);
+      if (videoDevices.length > 0) {
+        setCurrentDeviceId(videoDevices[0].deviceId);
+      }
+    } catch (error) {
+      console.error("Error fetching devices:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const detectObjects = useCallback(async () => {
+    const net = cocoModelRef.current;
+
     if (
       webcamRef.current &&
-      webcamRef.current.video.readyState === 4 // Check if webcam video is ready
+      webcamRef.current.video.readyState === 4
     ) {
       const video = webcamRef.current.video;
       const videoWidth = video.videoWidth;
       const videoHeight = video.videoHeight;
 
-      // Set canvas dimensions to match video dimensions
       canvasRef.current.width = videoWidth;
       canvasRef.current.height = videoHeight;
 
-      // Perform object detection
       const objects = await net.detect(video);
 
-      // Check if a person is detected and identify accompanying objects
       const isPersonDetected = objects.some((item) => item.class === "person");
-
       const otherObjects = objects
         .filter((item) => item.class !== "person")
         .map((item) => item.class);
 
-      // Handle announcement logic
       if (isPersonDetected && !personDetected && !isAnnouncementActive) {
         setPersonDetected(true);
         announcePersonDetected(otherObjects);
@@ -59,15 +75,32 @@ const ObjectDetection = () => {
         stopAnnouncement();
       }
 
-      // Draw results on the canvas
       drawDetections(objects, videoWidth, videoHeight);
     }
-  };
+  }, [isAnnouncementActive, personDetected]);
 
-  const announcePersonDetected = (otherObjects) => {
-    setIsAnnouncementActive(true); // Activate announcement
+  const drawDetections = useCallback((detections, videoWidth, videoHeight) => {
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.clearRect(0, 0, videoWidth, videoHeight);
 
-    // Construct the announcement message
+    detections.forEach((item) => {
+      const [x, y, width, height] = item.bbox;
+      ctx.strokeStyle = "#00FF00";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, width, height);
+
+      ctx.fillStyle = "#00FF00";
+      ctx.font = "18px Arial";
+      ctx.fillText(
+        `${item.class} (${(item.score * 100).toFixed(1)}%)`,
+        x,
+        y > 10 ? y - 5 : 10
+      );
+    });
+  }, []);
+
+  const announcePersonDetected = useCallback((otherObjects) => {
+    setIsAnnouncementActive(true);
     let msgText = "Person detected";
     if (otherObjects.length > 0) {
       msgText += ` with ${otherObjects.join(", ")}`;
@@ -77,78 +110,40 @@ const ObjectDetection = () => {
     window.speechSynthesis.speak(msg);
 
     msg.onend = () => {
-      setIsAnnouncementActive(false); // Deactivate after speech ends
-    };
-  };
-
-  const stopAnnouncement = () => {
-    window.speechSynthesis.cancel(); // Stop any ongoing announcements
-    setIsAnnouncementActive(false);
-  };
-
-  const drawDetections = (detections, videoWidth, videoHeight) => {
-    const ctx = canvasRef.current.getContext("2d");
-
-    // Clear the previous drawings
-    ctx.clearRect(0, 0, videoWidth, videoHeight);
-
-    // Draw each detected object
-    detections.forEach((item) => {
-      const [x, y, width, height] = item.bbox;
-
-      // Draw bounding box
-      ctx.strokeStyle = "#00FF00";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y, width, height);
-
-      // Draw label and confidence
-      ctx.fillStyle = "#00FF00";
-      ctx.font = "18px Arial";
-      ctx.fillText(
-        `${item.class} (${(item.score * 100).toFixed(1)}%)`,
-        x,
-        y > 10 ? y - 5 : 10
-      );
-    });
-  };
-
-  useEffect(() => {
-    runCoco();
-
-    const fetchDevices = async () => {
-      try {
-        const mediaDevices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = mediaDevices.filter(
-          (device) => device.kind === "videoinput"
-        );
-        setDevices(videoDevices);
-        if (videoDevices.length > 0) {
-          setCurrentDeviceId(videoDevices[0].deviceId);
-        }
-      } catch (error) {
-        console.error("Error fetching devices:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchDevices();
-
-    // Automatically trigger the "Stop Announcement" button every 10 seconds
-    const stopAnnouncementInterval = setInterval(() => {
-      stopAnnouncement();
-    }, 10000); // 10 seconds
-
-    return () => {
-      clearInterval(detectInterval); // Cleanup detection interval
-      clearInterval(stopAnnouncementInterval); // Cleanup stop announcement interval
+      setIsAnnouncementActive(false);
     };
   }, []);
+
+  const stopAnnouncement = useCallback(() => {
+    window.speechSynthesis.cancel();
+    setIsAnnouncementActive(false);
+  }, []);
+
+  useEffect(() => {
+    checkCameraPermission();
+
+    return () => {
+      clearInterval(detectObjects);
+      stopAnnouncement();
+    };
+  }, [checkCameraPermission, stopAnnouncement]);
+
+  useEffect(() => {
+    if (cameraPermissionGranted) {
+      (async () => {
+        cocoModelRef.current = await cocossdload();
+        setLoading(false);
+        setInterval(() => detectObjects(), 200);
+      })();
+    }
+  }, [cameraPermissionGranted, detectObjects]);
 
   return (
     <div className="flex flex-col justify-center items-center">
       <h1 className="text-5xl font-mono">Object Detection</h1>
-      {loading ? (
+      {!cameraPermissionGranted ? (
+        <div>Requesting camera permission...</div>
+      ) : loading ? (
         <div>Loading devices...</div>
       ) : (
         <>
@@ -161,7 +156,10 @@ const ObjectDetection = () => {
                     ? "bg-blue-500 text-white"
                     : "bg-black text-white"
                 } border-2 border-white hover:bg-white hover:text-black rounded`}
-                onClick={() => setCurrentDeviceId(device.deviceId)}
+                onClick={() => {
+                  setCurrentDeviceId(device.deviceId);
+                  videoConstraints.deviceId = { exact: device.deviceId };
+                }}
               >
                 {device.label || `Camera ${index + 1}`}
               </button>
@@ -173,7 +171,7 @@ const ObjectDetection = () => {
                 <Webcam
                   ref={webcamRef}
                   className="lg:h-[520px] border border-gray-300 rounded"
-                  videoConstraints={{ deviceId: currentDeviceId }}
+                  videoConstraints={videoConstraints}
                 />
                 <canvas
                   ref={canvasRef}
